@@ -1,0 +1,151 @@
+---
+title: "Get NASS stats"
+author: "jill deines"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+  
+Goal: retrieve NASS statistics to describe study area. 
+
+Includes:
+
+* county irrigated area - Census
+* county total cropland area - Census
+
+Notes:
+
+* line 57 requires a NASS API key that can be obtained from https://quickstats.nass.usda.gov/api
+* data downloads can already be found in the "data/tabular/nass" folder
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      cache = FALSE,
+                      eval = FALSE)
+```
+
+**R Packages Needed**
+  
+```{r packages, warning=FALSE, message=FALSE}
+library(dplyr)
+library(readr)
+library(tidycensus)
+
+# access quickstats API through rnassqs package, using your personal API key
+library(rnassqs)
+yourKey <- 'enterKeyHere'
+nassqs_auth(key = yourKey)
+
+library(here)
+sessionInfo()
+```
+
+
+*Directories*
+  
+```{r directories}
+repoDir <- here::here()
+nassDir <- paste0(repoDir,'/data/tabular/NASS')
+
+nassFileName_raw_irrigated <- 'NASS_Census_IrrArea_CornBeltWide_1997-2022.csv'
+nassFileName_raw_cropland <- 'NASS_Census_CroplandArea_CornBeltWide_1997-2022.csv'
+nassFileName_raw_cropland_agland <- 'NASS_Census_AgLandArea_US_state_1997-2022.csv'
+```
+
+
+# Irrigated Area
+Run 1x
+
+census > economics > farms and land and assets > ag land > area >
+
+Run for all states
+
+```{r retrieveNASS_irr, eval = FALSE}
+
+#statesWanted <- c('IN','IL','IA','OH','MI','MO','MN','WI','MI','NE','SD','ND')
+
+# param list without state
+paramsNoState <- list("source_desc" = "CENSUS",
+                 "agg_level_desc" = 'COUNTY',
+                 "year__GE" = 1997,
+                 "short_desc" = 'AG LAND, IRRIGATED - ACRES',
+                 "domain_desc" = 'TOTAL')
+
+
+# do all states together
+nassdf <- nassqs(paramsNoState)
+
+
+# # split up by state to avoid query limits
+# nasslist <- list()
+# for(state in statesWanted){
+#   params <- c(list("state_alpha" = state), paramsNoState)
+#   # retrieve county data by state
+#   nasslist[[state]] <- nassqs(params)
+# }
+
+# # convert list of data frames to 1 giant dataframe
+# nass.df <- do.call("rbind",nasslist)
+
+# tidy up a bit
+nassIrr <- nassdf %>%
+  mutate(fips5 = paste0(state_fips_code, county_ansi)) %>%
+  filter(!is.na(Value)) %>%    # remove no data
+  mutate(irrArea_ha = Value / 2.471) %>%  # acres to ha
+  dplyr::rename(irrArea_acres = Value) %>%
+  dplyr::select(c(fips5, county_name, state_alpha, state_name, year, short_desc,
+                  domain_desc, irrArea_acres, irrArea_ha)) %>%
+  arrange(fips5, year) %>%
+  as_tibble()
+
+# export
+write_csv(nassIrr, paste0(nassDir, '/', nassFileName_raw_irrigated))
+
+```
+
+
+
+# County Cropland Area
+census > economics > farms and land and assets > ag land > area >
+
+```{r getCropArea, eval = FALSE}
+
+
+# param list without state
+paramsNoState2 <- list("source_desc" = "CENSUS",
+                 "agg_level_desc" = 'COUNTY',
+                 "year__GE" = 1997,
+                 "short_desc" = 'AG LAND, CROPLAND - ACRES',
+                 "domain_desc" = 'TOTAL')
+
+# all at once
+nass.df <- nassqs(paramsNoState2)
+
+
+# tidy up a bit
+nassCropland <- nass.df %>%
+  mutate(fips5 = paste0(state_fips_code, county_ansi)) %>%
+  filter(!is.na(Value)) %>%    # remove no data
+  mutate(croplandArea_ha = Value / 2.471) %>%  # acres to ha
+  dplyr::rename(croplandArea_acres = Value) %>%
+  dplyr::select(c(fips5, county_name, state_alpha, state_name, year, short_desc,
+                  domain_desc, croplandArea_ha, croplandArea_acres)) %>%
+  arrange(fips5, year) %>%
+  as_tibble()
+
+# export
+write_csv(nassCropland, paste0(nassDir, '/', nassFileName_raw_cropland))
+
+```
+
+
+
+
+
+
+
+
+
+
