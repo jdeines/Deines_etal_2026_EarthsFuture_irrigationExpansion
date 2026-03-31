@@ -1,0 +1,392 @@
+---
+title: "Check NASS - Irrigation by Crop"
+author: "jill deines"
+date: '2025-05-13'
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+  
+Goal: look at irrigated area by crop type from NASS statistics
+
+output: formmated data frame for figure 2a
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path='../figure/00.30_checkNass_irrStats/',
+                      cache = FALSE,
+                      eval = FALSE)
+```
+
+**R Packages Needed**
+  
+```{r packages, warning=FALSE, message=FALSE}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(tidycensus)
+library(purrr)
+
+library(data.table)
+
+
+library(here)
+sessionInfo()
+```
+
+
+*Directories*
+  
+```{r directories}
+# full 2017 census to extract irrigation by crop type
+census2017raw_fn <- '/Users/dein121/local/data_nonRepo/2025_quickstats/qs.census2017.txt.gz'
+
+
+repoDir <- here::here()
+nassDir <- paste0(repoDir,'/data/tabular/NASS')
+nassFileName_raw_cropland <- 'NASS_Census_CroplandArea_CornBeltWide_1997-2022.csv'
+
+# output
+compiled_nassIrrDataName <- 'Compiled_CENSUS_2017_irrigated_byCropType_7states.csv'
+```
+
+
+# load and clean data
+
+## extract info from census
+works from raw 2017 census to parse through crop types and suprasets
+
+```{r load1, eval = FALSE}
+
+states_toKeep <- c('MN','WI','MI','OH','IN','IL','IA')
+
+columnsToDrop <- c('STATE_ANSI','ASD_CODE','ASD_DESC','COUNTY_ANSI','COUNTY_CODE',
+                   'COUNTY_NAME','REGION_DESC','ZIP_5','WATERSHED_CODE',
+                   'WATERSHED_DESC','CONGR_DISTRICT_CODE','COUNTRY_CODE',
+                   'COUNTRY_NAME','LOCATION_DESC','FREQ_DESC','BEGIN_CODE',
+                   'END_CODE','REFERENCE_PERIOD_DESC','WEEK_ENDING','LOAD_TIME',
+                   'CV_.','STATE_NAME','STATE_FIPS_CODE')
+
+
+# load and format/clean
+test <- read.table(census2017raw_fn, sep = '\t', header = TRUE, fill = TRUE)
+
+# remove (D) values, remove commas (!), convert to numeric
+nass.df <- test[!grepl('(D)',test$VALUE),]
+nass.df$VALUE <- gsub(",", "", nass.df$VALUE, fixed = T)
+nass.df$VALUE <- as.numeric(nass.df$VALUE)
+
+test2 <- nass.df %>% 
+  filter(!is.na(nass.df$VALUE)) %>%
+  dplyr::select(-all_of(columnsToDrop)) %>%
+  filter(STATE_ALPHA %in% states_toKeep)
+
+test3 <- test2 %>% 
+  filter(SECTOR_DESC %in% c('CROPS')) %>%
+  filter(GROUP_DESC %in% c('FIELD CROPS','VEGETABLES','FRUIT & TREE NUTS',
+                           'HORTICULTURE')) %>%
+  filter(grepl('IRRIGATED',PRODN_PRACTICE_DESC)) %>%
+  filter(AGG_LEVEL_DESC == 'STATE',
+         UNIT_DESC == 'ACRES',
+         DOMAIN_DESC == 'TOTAL',
+         !grepl('NONE OF CROP',PRODN_PRACTICE_DESC),
+         !grepl('NON-IRRIGATED',PRODN_PRACTICE_DESC)) %>%
+  mutate(values_ha = VALUE * 0.404686) %>%
+  dplyr::select(-c(AGG_LEVEL_DESC,UNIT_DESC, DOMAIN_DESC,
+                   SOURCE_DESC, GROUP_DESC, SECTOR_DESC,
+                   UTIL_PRACTICE_DESC, STATISTICCAT_DESC, DOMAINCAT_DESC,
+                   VALUE)) %>%
+  dplyr::select(YEAR, STATE_ALPHA, COMMODITY_DESC, everything()) %>%
+  arrange(YEAR, STATE_ALPHA, COMMODITY_DESC) %>%
+  mutate(YEAR = as.numeric(YEAR))
+
+
+# collapse hay
+hays0 <- test3 %>%
+  filter(grepl('HAY',COMMODITY_DESC))
+hays <- hays0 %>%
+  filter(COMMODITY_DESC == 'HAY & HAYLAGE',
+         CLASS_DESC == 'ALL CLASSES',
+         PRODN_PRACTICE_DESC == 'IRRIGATED')
+
+# collapse berries (no total in 2002)
+berries0 <- test3 %>%
+  filter(grepl('BERRY',COMMODITY_DESC))
+berries <- berries0 %>%
+  group_by(YEAR, STATE_ALPHA, COMMODITY_DESC, CLASS_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  ungroup() %>%
+  mutate(PRODN_PRACTICE_DESC = 'IRRIGATED',
+         SHORT_DESC = 'BERRY TOTALS, IRRIGATED - ACRES HARVESTED')
+
+# ALL OTHERS
+others0 <- test3 %>%
+    filter(!grepl('BERRY',COMMODITY_DESC),
+           !grepl('HAY',COMMODITY_DESC),
+           CLASS_DESC != 'WINTER',
+           !grepl('SPRING',CLASS_DESC),
+           !grepl('PEPPERMINT',CLASS_DESC),
+           !grepl('SPEARMINT',CLASS_DESC),
+           !grepl('OIL TYPE',CLASS_DESC),
+           !grepl('PART OF CROP', PRODN_PRACTICE_DESC),
+           !grepl('ENTIRE CROP',PRODN_PRACTICE_DESC))
+
+# collapse corn + sorghum grain/silage
+others <- others0 %>%
+  group_by(YEAR, STATE_ALPHA, COMMODITY_DESC, CLASS_DESC,
+           PRODN_PRACTICE_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  ungroup() %>%
+  mutate(SHORT_DESC = paste0(COMMODITY_DESC, ', IRRIGATED - ACRES HARVESTED'))
+
+
+# combine 
+cen2017 <- bind_rows(hays, berries, others) %>%
+  arrange(YEAR, STATE_ALPHA, COMMODITY_DESC)
+```
+
+
+
+## part 1: irrigated area by crop type
+```{r irr_byCrop}
+
+# all study area states together
+latest_totals <- cen2017 %>%
+  group_by(COMMODITY_DESC) %>%
+  summarise(values_ha = sum(values_ha, na.rm = TRUE)) %>%
+  ungroup()
+
+# create and add others class for low freq types
+other <- latest_totals %>%
+  filter(values_ha <=5000) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  mutate(COMMODITY_DESC = 'OTHER')
+  
+latest_totals2 <- latest_totals %>%
+  filter(values_ha > 5000) %>%
+  bind_rows(other)
+
+# make a percent column
+total_irr <- sum(latest_totals2$values_ha)
+latest_totals2$percentOfIrr <- latest_totals2$values_ha / total_irr * 100
+latest_totals2 %>% arrange(-percentOfIrr)
+
+# plot! by area
+p_irrByCrop <- ggplot(latest_totals2 %>% filter(values_ha > 5000),
+       aes(x = reorder(COMMODITY_DESC, -values_ha), y = values_ha / 1000)) +
+  geom_bar(stat = 'identity') +
+  xlab('Commodity') + ylab('Area (1000 ha)') +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+
+
+# percent
+# plot!
+irrArea_toPlot <- latest_totals2 %>% filter(values_ha > 5000)
+p_irrByCrop_percent <- ggplot(irrArea_toPlot,
+       aes(x = reorder(COMMODITY_DESC, -percentOfIrr), y = percentOfIrr )) +
+  geom_bar(stat = 'identity') +
+  xlab('Commodity') + ylab('Percent of Irrigated Area') +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+
+```
+
+## part 2: get croptype areas, total 
+percent of cropped area covered by each crop group
+
+also works from full 2017 census. some cleaning to remove duplicates via suprasets. this is not particularly efficient but done iteratively while examining subgroups
+
+```{r stats_rainfedProportions}
+states_toKeep <- c('MN','WI','MI','OH','IN','IL','IA')
+
+# total cropland
+crop_county <- read_csv(paste0(nassDir,'/',nassFileName_raw_cropland))
+crop_state <- crop_county %>%
+  group_by(state_alpha, state_name, year) %>%
+  summarize(croplandArea_ha = sum(croplandArea_ha)) %>%
+  ungroup()
+
+cropland_region <- crop_state %>% 
+  filter(state_alpha %in% states_toKeep,
+         year == 2017) 
+croplandTotal <- sum(cropland_region$croplandArea_ha)
+
+# from formatted 2017 census (previous chunk) extract corn/soy total area in study region
+corn_soy <- nass.df %>% 
+  filter(!is.na(nass.df$VALUE)) %>%
+  filter(STATE_ALPHA %in% states_toKeep) %>%
+  filter(PRODN_PRACTICE_DESC == 'ALL PRODUCTION PRACTICES',
+         grepl('CORN, GRAIN', SHORT_DESC) | grepl('SOY', SHORT_DESC)) %>%
+  filter(AGG_LEVEL_DESC == 'STATE',
+         UNIT_DESC == 'ACRES',
+         DOMAIN_DESC == 'TOTAL') %>%
+  mutate(values_ha = VALUE * 0.404686) %>%
+  group_by(SHORT_DESC) %>%
+  summarise(values_ha = sum(values_ha)) %>%
+  ungroup() %>%
+  mutate(percentCropland = values_ha / croplandTotal * 100,
+         commodity = case_when(grepl('CORN',SHORT_DESC) ~ 'CORN',
+                               grepl('SOY',SHORT_DESC) ~ 'SOYBEANS'))
+corn_soy
+
+
+# extract other groups in Figure 2a -----------
+nass2017_a <- nass.df %>% 
+  filter(!is.na(nass.df$VALUE)) %>%
+  filter(STATE_ALPHA %in% states_toKeep) %>%
+  filter(PRODN_PRACTICE_DESC == 'ALL PRODUCTION PRACTICES',
+         SECTOR_DESC == 'CROPS',
+         AGG_LEVEL_DESC == 'STATE',
+         UNIT_DESC == 'ACRES',
+         DOMAIN_DESC == 'TOTAL') # RETAIN hay and haylage combo column
+
+vegetables <- nass2017_a %>%
+  filter(GROUP_DESC == 'VEGETABLES') %>%
+  dplyr::select(c(COMMODITY_DESC, CLASS_DESC, 
+                  SHORT_DESC,STATE_ALPHA, VALUE)) %>%
+  mutate(values_ha = VALUE * 0.404686) %>%
+  arrange(COMMODITY_DESC) %>%
+  filter(!(grepl('FRESH MARKET', SHORT_DESC) | 
+             grepl('PROCESSING', SHORT_DESC) |
+             grepl('SUMMER', SHORT_DESC) |
+             grepl('WINTER', SHORT_DESC) |
+             grepl('BEANS',SHORT_DESC) |
+             grepl('CORN',SHORT_DESC))) %>%
+  group_by(SHORT_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  ungroup() %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  mutate(commodity = 'VEGETABLE TOTALS',
+         percentCropland = values_ha / croplandTotal * 100)
+                  
+hays <- nass2017_a %>%
+  filter(SHORT_DESC == 'HAY - ACRES HARVESTED') %>%
+  mutate(values_ha = VALUE * 0.404686) %>%
+  group_by(SHORT_DESC,COMMODITY_DESC,CLASS_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  ungroup() %>%
+  arrange(COMMODITY_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  mutate(commodity = 'HAY & HAYLAGE',
+         percentCropland = values_ha / croplandTotal * 100)
+
+berries <- nass2017_a %>%
+  filter(SHORT_DESC == 'BERRY TOTALS - ACRES GROWN') %>%  
+  mutate(values_ha = VALUE * 0.404686) %>%
+  group_by(SHORT_DESC,COMMODITY_DESC,CLASS_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  ungroup() %>%
+  arrange(COMMODITY_DESC) %>%
+  mutate(commodity = 'BERRY TOTALS',
+         percentCropland = values_ha / croplandTotal * 100)
+  
+beans <- nass2017_a %>%
+  filter(grepl('BEANS',SHORT_DESC)) %>%  
+  mutate(values_ha = VALUE * 0.404686) %>%
+  group_by(SHORT_DESC,COMMODITY_DESC,CLASS_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  ungroup() %>%
+  arrange(COMMODITY_DESC) %>%
+  filter(!(grepl('FRESH MARKET', SHORT_DESC) | 
+             grepl('PROCESSING', SHORT_DESC) |
+             grepl('SOY',SHORT_DESC))) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  mutate(commodity = 'BEANS',
+         percentCropland = values_ha / croplandTotal * 100)
+
+wheat <- nass2017_a %>%
+  filter(SHORT_DESC ==  'WHEAT, SPRING, (EXCL DURUM) - ACRES HARVESTED' |
+           SHORT_DESC == 'WHEAT, WINTER - ACRES HARVESTED') %>%  
+  filter(grepl('WHEAT',SHORT_DESC)) %>%
+  mutate(values_ha = VALUE * 0.404686) %>%
+  group_by(SHORT_DESC,COMMODITY_DESC,CLASS_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  ungroup() %>%
+  arrange(COMMODITY_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  mutate(commodity = 'WHEAT',
+         percentCropland = values_ha / croplandTotal * 100)
+
+# wild rice
+wildRice <- nass2017_a %>%
+  filter(grepl('RICE',SHORT_DESC)) %>%  
+  mutate(values_ha = VALUE * 0.404686) %>%
+  group_by(SHORT_DESC,COMMODITY_DESC,CLASS_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  ungroup() %>%
+  arrange(COMMODITY_DESC) %>%
+  mutate(commodity = 'WILD RICE',
+         percentCropland = values_ha / croplandTotal * 100)
+
+# popcorn
+popcorn <- nass2017_a %>%
+  filter(grepl('POPCORN',SHORT_DESC)) %>%  
+  mutate(values_ha = VALUE * 0.404686) %>%
+  group_by(SHORT_DESC,COMMODITY_DESC,CLASS_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  ungroup() %>%
+  arrange(COMMODITY_DESC) %>%
+  mutate(commodity = 'POPCORN',
+         percentCropland = values_ha / croplandTotal * 100)
+
+orchards <- nass2017_a %>%
+  filter(GROUP_DESC == 'FRUIT & TREE NUTS',
+         !(grepl('BERRIES',SHORT_DESC ) | grepl('BERRY',SHORT_DESC)),
+         # eliminate bearing/non bearing sub cats
+         grepl('&', SHORT_DESC) | grepl('GROWN',SHORT_DESC),
+         # REMOVE OTHER REPETITIVE SUB CATS
+         !(CLASS_DESC %in% c('CLINGSTONE','FREESTONE','(EXCL BARTLETT)',
+                             'BARTLETT','IMPROVED','NATIVE & SEEDLING')),
+         # keep plum and prune indvl classes
+         COMMODITY_DESC != 'PLUMS & PRUNES',
+         COMMODITY_DESC != 'TREE NUT TOTALS') %>% 
+  mutate(values_ha = VALUE * 0.404686) %>%
+  group_by(SHORT_DESC,COMMODITY_DESC,CLASS_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  ungroup() %>%
+  arrange(COMMODITY_DESC) %>%
+  summarize(values_ha = sum(values_ha)) %>%
+  mutate(commodity = 'ORCHARDS',
+         percentCropland = values_ha / croplandTotal * 100)
+
+other <- data.frame(values_ha = 13360,
+                    commodity = 'OTHER',
+                    percentCropland = 13360 / croplandTotal * 100)
+# combine and derive "other"
+allCroplandByCrop <- bind_rows(corn_soy,vegetables,hays,berries,beans,
+                               wheat,wildRice,popcorn, orchards, other)
+
+# p_croplandByCrop_percent <- ggplot(allCroplandByCrop,
+#        aes(x = reorder(commodity, -percentCropland), y = percentCropland )) +
+#   geom_bar(stat = 'identity') +
+#   xlab('Commodity') + ylab('Percent of Cropland Area') +
+#   theme_bw() +
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+# 
+# p_croplandByCrop_percent 
+
+```
+
+
+## combine and export
+```{r}
+
+comboCrop <- irrArea_toPlot %>%
+  mutate(type = 'Irrigated Land') %>% 
+  rename(percent = percentOfIrr) %>%
+  bind_rows(allCroplandByCrop %>%
+              dplyr::select(commodity, values_ha, percentCropland) %>%
+              rename(COMMODITY_DESC = commodity,
+                     percent = percentCropland) %>%
+              mutate(type = 'All Cropland')) 
+comboCrop$type2 <- factor(comboCrop$type, levels=c('Irrigated Land',
+                                                   'All Cropland'))
+
+write_csv(comboCrop, paste0(nassDir,'/',compiled_nassIrrDataName))
+
+```

@@ -1,0 +1,345 @@
+---
+title: "Irrigated Area Summary Stats"
+author: "jill deines/sophie baur"
+date: '2024-02-05'
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+  
+Goal: Assess historic changes in irrigated area based on NASS stats
+
+Also includes:
+
+* Generation of Figure 1c
+* Generation of Figure 2a
+* Calculating statistics for intro and study area background
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path='../figure/06.00_Fig_irrTrends/',
+                      cache = FALSE)
+```
+
+**R Packages Needed**
+  
+```{r packages, warning=FALSE, message=FALSE}
+
+library(dplyr)
+library(ggplot2)
+library(geofacet)
+library(tidyr)
+library(readr)
+library(geofacet)
+library(patchwork)
+library(viridis)
+library(RColorBrewer)
+
+library(here)
+sessionInfo()
+```
+
+
+*Directories*
+  
+```{r directories}
+# nass data files
+repoDir <- here::here()
+nassDir <- paste0(repoDir,'/data/tabular/NASS')
+
+
+nassFileName_raw_irrigated <- 'NASS_Census_IrrArea_CornBeltWide_1997-2022.csv'
+nassFileName_raw_cropland <- 'NASS_Census_CroplandArea_CornBeltWide_1997-2022.csv'
+
+# full 2017 census to extract irrigation by crop type
+census2017raw_fn <- '/Users/dein121/local/data_nonRepo/2025_quickstats/qs.census2017.txt.gz'
+
+# NASS Census irrigated area BY CROP (compiled in 00.30_checkNASS_irrigationByCrop.Rmd)
+compiled_nassIrrDataName <- 'Compiled_CENSUS_2017_irrigated_byCropType_7states.csv'
+
+# for production summary
+nassFileName_raw_maize_NAME <- 'NASS_Survey_RAW_Maize_production_yields_harvestedArea_CONUS_1997-2023_20250323.csv'
+nassFileName_raw_SOYBEAN_NAME <- 'NASS_Survey_RAW_Soybeans_production_yields_harvestedArea_CONUS_1997-2023_20250323.csv'
+
+
+# output figures -------------
+figDir <- paste0(repoDir,'/Figures_manuscript')
+```
+
+
+# Load 
+
+## national irrigated area 
+(from NASS Census via 00.20...Rmd)
+
+```{r load1}
+# load county data; also aggregate to state
+irr_county <- read_csv(paste0(nassDir,'/',nassFileName_raw_irrigated ))
+irr_state <- irr_county %>%
+  group_by(state_alpha, state_name, year) %>%
+  summarize(irrArea_ha = sum(irrArea_ha))
+
+#define study area
+study_area <- c("MN","WI","IA","IL","IN","MI","OH")
+
+#subset for study area
+irr_state_sa <- irr_state[irr_state$state_alpha %in% (study_area),]
+
+#sum irrigated area for the study area states by year
+irr_area_sa_year <- irr_state_sa %>%
+  group_by(year) %>%
+  summarize(irrArea_ha = sum(irrArea_ha))
+```
+
+## national cropland area
+
+```{r load2}
+#load in cropland dataset
+crop_county <- read_csv(paste0(nassDir,'/',nassFileName_raw_cropland))
+
+#merge dataframes
+crop_irr_county <- merge(irr_county, crop_county, by = c("county_name","state_name","year"))
+
+#group to state level
+crop_irr_state <- crop_irr_county %>%
+  group_by(state_alpha.x, state_name, year) %>%
+  summarize(irrArea_ha = sum(irrArea_ha), 
+            croplandArea_ha = sum(croplandArea_ha)) %>%
+  ungroup()
+crop_irr_state$irr_percent <- (crop_irr_state$irrArea_ha/crop_irr_state$croplandArea_ha)*100
+
+```
+
+## maize and soy production
+
+```{r load3}
+# load NASS
+maize_prod00 <- read_csv(paste0(nassDir,'/',nassFileName_raw_maize_NAME))
+soybeans_prod00 <- read_csv(paste0(nassDir,'/',nassFileName_raw_SOYBEAN_NAME))
+```
+
+## summarized irr/cropland by crop group
+from 00.30...Rmd based on full 2017 census
+
+```{r load4}
+irr_byCrop <- read_csv(paste0(nassDir,'/',compiled_nassIrrDataName))
+```
+
+
+# MS fig: Fig 1c, trends by states
+
+```{r}
+palette_OkabeIto <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", 
+                      "#0072B2", "#D55E00", "#CC79A7", "#999999")
+palette_OkabeIto_black_newYellow <- c("#E69F00", "#56B4E9", "#009E73", 
+                                     # "#F5C710", 
+                            "#0072B2", "#D55E00", "#CC79A7", "#000000")
+
+pal_state <- c('#CC6677','#44AA99','#88CCEE','#888888','#AA4499','goldenrod2','#332288')
+
+p_studyArea <- ggplot(irr_state_sa,
+       aes(x = year, y = irrArea_ha/1000, group = state_alpha,
+           color = state_alpha)) +
+  geom_point() + geom_line() +
+  #scale_color_viridis(discrete = T, option = 'turbo') +
+  scale_color_manual(values = (palette_OkabeIto_black_newYellow)) +
+ # facet_wrap(~state_name, nrow = 2) +
+  ylab('') +
+  theme_bw() + theme(legend.position = 'bottom',
+                     legend.title = element_blank()) +
+  ggtitle('Study Area by State')
+
+# total study area
+p_studyAreaTot <- ggplot(irr_area_sa_year,
+       aes(x = year, y = irrArea_ha/1000)) +
+  geom_line() + geom_point() +
+  ylab('') +
+  theme_bw() + ggtitle('Study Area Total')
+
+
+# rest of conus
+p_conus <- ggplot(irr_area_sa_year,
+       aes(x = year, y = irrArea_ha/1000)) +
+  geom_line() + geom_point() +
+  theme_bw() +
+   ylab('Irrigated Area (1000 ha)') +
+  ggtitle('CONUS (Non - Study Area)')
+
+#combine
+p_all <- p_conus + p_studyAreaTot + p_studyArea &
+  xlab('Year' )  &
+  theme(plot.margin = margin(0, 0, 0, 0, "pt"),
+        text = element_text(size = 10))
+p_all
+
+
+# three wide
+ggsave(filename = paste0(figDir,'/Fig1c_NASS_trends_studyAreaTotals_3panel.png'),
+       plot =p_all, dpi = 600,
+       device = 'png' , width = 6.35, height = 3.15, units = 'in')
+
+ggsave(filename = paste0(figDir,'/Fig1c_NASS_trends_studyAreaTotals_3panel.pdf'),
+       plot =p_all, dpi = 600,
+       device = 'pdf' , width = 6.35, height = 3.15, units = 'in')
+```
+
+# MS fig: Fig 2a, irr by type
+
+
+```{r fig2a}
+
+p_areaByCropBoth <- ggplot(irr_byCrop,
+      aes(x = reorder(COMMODITY_DESC, -percent), y = percent, fill = type2 )) +
+  geom_bar(stat = 'identity', position = 'dodge') +
+  xlab('Commodity') + ylab('Percent of Total') +
+  theme_bw() +
+  scale_fill_manual(values = c('#E69F00','#0072B2')) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.title = element_blank(),
+        legend.position = c(.7,.7),
+        panel.grid.minor.y = element_blank())  
+p_areaByCropBoth
+
+ggsave(filename = paste0(figDir,'/Fig2a_NASS_AreaByCrop_Both.png'),
+       plot =p_areaByCropBoth, dpi = 600,
+       device = 'png' , width = 3.15, height = 3.5, units = 'in')
+
+ggsave(filename = paste0(figDir,'/Fig2a_NASS_AreaByCrop_Both.pdf'),
+       plot =p_areaByCropBoth, dpi = 600,
+       device = 'pdf' , width = 3.15, height = 3.5, units = 'in')
+```
+
+# MS statistics
+## irrigation as a percent of cropped area
+
+Summarize percent of relevant areas
+
+```{r}
+#define study area
+study_area <- c("MN","WI","IA","IL","IN","MI","OH")
+
+crop_irr_state %>%
+  filter(state_alpha.x %in% study_area) %>%
+  group_by(year) %>%
+  summarize(irrArea_ha = sum(irrArea_ha),
+            croplandArea_ha = sum(croplandArea_ha)) %>%
+  mutate(irr_percent = irrArea_ha/croplandArea_ha*100)
+
+```
+
+
+quantify the increase in irrigated area for the full study region as a whole, as well as by state
+
+compare with regions outside the study area
+
+```{r}
+#grab irrigated area for years 1997, 2002, 2007, and 2022
+irr_area_1997_sa <- irr_area_sa_year$irrArea_ha[irr_area_sa_year$year == 1997]
+irr_area_2022_sa <- irr_area_sa_year$irrArea_ha[irr_area_sa_year$year == 2022]
+
+#calculate percent change from 1997-2022
+study_area_change_1997 <- ((irr_area_2022_sa - irr_area_1997_sa)/(irr_area_1997_sa))*100 
+
+
+paste0("From 1997 to 2022, the irrigated area within the study area increased by ", study_area_change_1997, "%.")
+
+```
+
+
+2) Quantify the change in irrigated area in other regions. (all states within CONUS except the study area)
+
+```{r}
+#subset contiguous US (without study area)
+irr_state_nsa <- irr_state[!(irr_state$state_alpha %in% (study_area) | irr_state$state_alpha %in% c("AK","HI")),]
+
+#sum the irrigated area for the contiguous US without study area, by year
+irr_area_nsa_year <- irr_state_nsa %>%
+  group_by(year) %>%
+  summarize(irrArea_ha = sum(irrArea_ha))
+
+#grab irrigated area for years 2022 and 1997
+irr_area_2022_nsa <- irr_area_nsa_year$irrArea_ha[irr_area_nsa_year$year == 2022]
+irr_area_1997_nsa <- irr_area_nsa_year$irrArea_ha[irr_area_nsa_year$year == 1997]
+
+#calculate percent change from 1997-2002
+non_study_area_change <- ((irr_area_2022_nsa - irr_area_1997_nsa)/(irr_area_1997_nsa))*100 
+  
+paste0("From 1997 to 2022, the irrigated area within the contiguous US, excluding the study area, increased by ", non_study_area_change, "%.")
+
+```
+
+## production stats
+
+### maize
+```{r maize_production}
+#define study area
+study_area <- c("MN","WI","IA","IL","IN","MI","OH")
+
+# state production by year
+maize_prod0 <- maize_prod00 %>% 
+  filter(short_desc == 'CORN, GRAIN - PRODUCTION, MEASURED IN BU') %>%
+  dplyr::select(c(state_alpha,year,Value, county_code)) %>%
+  group_by(state_alpha, year) %>%
+  summarize(production_bu = sum(Value)) %>%
+  ungroup()
+
+# maize study period mean
+maize_prod <- maize_prod0 %>%
+  filter(year >= 1997 & year <= 2017) %>%
+  group_by(state_alpha) %>%
+  summarize(production_bu = mean(production_bu))
+
+# percent of maize production in  study area
+maize_prod_sums <- maize_prod %>%
+  mutate(isStudyArea = case_when(state_alpha %in% study_area ~ 1,
+                            !(state_alpha %in% study_area) ~0)) %>%
+  group_by(isStudyArea) %>%
+  summarize(production_bu = sum(production_bu)) %>%
+  tidyr::spread(., key = isStudyArea, value = production_bu) %>%
+  mutate(pecentW =  `1` /( `0`+`1`) * 100)
+maize_prod_sums
+```
+
+
+### soybeans
+```{r soybeans_production}
+#define study area
+study_area <- c("MN","WI","IA","IL","IN","MI","OH")
+
+
+# state production by year
+soybeans_prod0 <- soybeans_prod00 %>% 
+  filter(short_desc == 'SOYBEANS - PRODUCTION, MEASURED IN BU') %>%
+  dplyr::select(c(state_alpha,year,Value, county_code)) %>%
+  group_by(state_alpha, year) %>%
+  summarize(production_bu = sum(Value)) %>%
+  ungroup()
+
+# soybeans study period mean
+soybeans_prod <- soybeans_prod0 %>%
+  filter(year >= 1997 & year <= 2017) %>%
+  group_by(state_alpha) %>%
+  summarize(production_bu = mean(production_bu))
+
+# percent of soybeans production in  study area
+soybeans_prod_sums <- soybeans_prod %>%
+  mutate(isStudyArea = case_when(state_alpha %in% study_area ~ 1,
+                            !(state_alpha %in% study_area) ~0)) %>%
+  group_by(isStudyArea) %>%
+  summarize(production_bu = sum(production_bu)) %>%
+  tidyr::spread(., key = isStudyArea, value = production_bu) %>%
+  mutate(pecentW =  `1` /( `0`+`1`) * 100)
+soybeans_prod_sums
+```
+
+
+
+
+
+
+
+
+

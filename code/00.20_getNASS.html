@@ -1487,8 +1487,10 @@ border-radius: 0px;
 <p>Goal: retrieve NASS statistics to describe study area.</p>
 <p>Includes:</p>
 <ul>
-<li>county irrigated area - Census</li>
-<li>county total cropland area - Census</li>
+<li><p>county irrigated area - Census</p></li>
+<li><p>county total cropland area - Census</p></li>
+<li><p>maize production history</p></li>
+<li><p>soybean production history</p></li>
 </ul>
 <p>Notes:</p>
 <ul>
@@ -1512,9 +1514,14 @@ sessionInfo()</code></pre>
 <pre class="r"><code>repoDir &lt;- here::here()
 nassDir &lt;- paste0(repoDir,&#39;/data/tabular/NASS&#39;)
 
+# output filenames: irrigated and total croplands
 nassFileName_raw_irrigated &lt;- &#39;NASS_Census_IrrArea_CornBeltWide_1997-2022.csv&#39;
 nassFileName_raw_cropland &lt;- &#39;NASS_Census_CroplandArea_CornBeltWide_1997-2022.csv&#39;
-nassFileName_raw_cropland_agland &lt;- &#39;NASS_Census_AgLandArea_US_state_1997-2022.csv&#39;</code></pre>
+
+# output filenames: production
+nassFileName_raw_maize_NAME &lt;- &#39;NASS_Survey_RAW_Maize_production_yields_harvestedArea_CONUS_1997-2023_20250323.csv&#39;
+
+nassFileName_raw_SOYBEAN_NAME &lt;- &#39;NASS_Survey_RAW_Soybeans_production_yields_harvestedArea_CONUS_1997-2023_20250323.csv&#39;</code></pre>
 <div id="irrigated-area" class="section level1">
 <h1>Irrigated Area</h1>
 <p>Run 1x</p>
@@ -1588,6 +1595,81 @@ nassCropland &lt;- nass.df %&gt;%
 
 # export
 write_csv(nassCropland, paste0(nassDir, &#39;/&#39;, nassFileName_raw_cropland))</code></pre>
+</div>
+<div id="corn-metrics" class="section level1">
+<h1>Corn metrics</h1>
+<p>Run 1x</p>
+<p>survey &gt; crops &gt; field crops</p>
+<p>Note: this ran with year &gt;= 1997 in 2023, but it fails now in 2026
+due to too many records. Would need to adjust years or download by
+state, etc</p>
+<pre class="r"><code># string of &quot;short_desc&quot; wanted
+short_corn &lt;- c(&#39;CORN, GRAIN - PRODUCTION, MEASURED IN BU&#39;,
+                &#39;CORN, GRAIN, IRRIGATED - PRODUCTION, MEASURED IN BU&#39;,
+                &#39;CORN, GRAIN, NON-IRRIGATED - PRODUCTION, MEASURED IN BU&#39;,
+                &#39;CORN, GRAIN - YIELD, MEASURED IN BU / ACRE&#39;,
+                &#39;CORN, GRAIN, IRRIGATED - YIELD, MEASURED IN BU / ACRE&#39;,
+                &#39;CORN, GRAIN, NON-IRRIGATED - YIELD, MEASURED IN BU / ACRE&#39;,
+                &#39;CORN, GRAIN - ACRES HARVESTED&#39;,
+                &#39;CORN, GRAIN, IRRIGATED - ACRES HARVESTED&#39;,
+                &#39;CORN, GRAIN, NON-IRRIGATED - ACRES HARVESTED&#39;)
+
+# param list without short desc
+paramsNoState &lt;- list(&quot;source_desc&quot; = &quot;SURVEY&quot;,
+                 &quot;agg_level_desc&quot; = &#39;COUNTY&#39;,
+                 &quot;year__GE&quot; = 1997,
+                 &quot;domain_desc&quot; = &#39;TOTAL&#39;)
+
+
+# split up by short-desc to avoid query limits, etc
+nass_corn_ls &lt;- list()
+for(short_desc in short_corn){
+  params &lt;- c(list(&quot;short_desc&quot; = short_desc), paramsNoState)
+  # retrieve county data by state
+  nass_corn_ls[[short_desc]] &lt;- nassqs(params)
+}
+
+# # convert list of data frames to 1 giant dataframe
+nass_corn &lt;- do.call(&quot;rbind&quot;,nass_corn_ls)
+
+# export
+write_csv(nass_corn, paste0(nassDir, &#39;/&#39;, nassFileName_raw_maize_NAME))</code></pre>
+</div>
+<div id="soy-metrics" class="section level1">
+<h1>Soy metrics</h1>
+<p>Run 1x</p>
+<p>survey &gt; crops &gt; field crops</p>
+<pre class="r"><code># string of &quot;short_desc&quot; wanted
+short_SOY &lt;- c(&#39;SOYBEANS - PRODUCTION, MEASURED IN BU&#39;,
+                &#39;SOYBEANS, IRRIGATED - PRODUCTION, MEASURED IN BU&#39;,
+                &#39;SOYBEANS, NON-IRRIGATED - PRODUCTION, MEASURED IN BU&#39;,
+                &#39;SOYBEANS - YIELD, MEASURED IN BU / ACRE&#39;,
+                &#39;SOYBEANS, IRRIGATED - YIELD, MEASURED IN BU / ACRE&#39;,
+                &#39;SOYBEANS, NON-IRRIGATED - YIELD, MEASURED IN BU / ACRE&#39;,
+                &#39;SOYBEANS - ACRES HARVESTED&#39;,
+                &#39;SOYBEANS, IRRIGATED - ACRES HARVESTED&#39;,
+                &#39;SOYBEANS, NON-IRRIGATED - ACRES HARVESTED&#39;)
+
+# param list without short desc
+paramsNoState &lt;- list(&quot;source_desc&quot; = &quot;SURVEY&quot;,
+                 &quot;agg_level_desc&quot; = &#39;COUNTY&#39;,
+                 &quot;year__GE&quot; = 1997,
+                 &quot;domain_desc&quot; = &#39;TOTAL&#39;)
+
+
+# split up by short-desc to avoid query limits, etc
+nass_soy_ls &lt;- list()
+for(short_desc in short_SOY){
+  params &lt;- c(list(&quot;short_desc&quot; = short_desc), paramsNoState)
+  # retrieve county data by state
+  nass_soy_ls[[short_desc]] &lt;- nassqs(params)
+}
+
+# # convert list of data frames to 1 giant dataframe
+nass_soy &lt;- do.call(&quot;rbind&quot;,nass_soy_ls)
+
+# export
+write_csv(nass_soy, paste0(nassDir, &#39;/&#39;, nassFileName_raw_SOYBEAN_NAME))</code></pre>
 </div>
 
 
