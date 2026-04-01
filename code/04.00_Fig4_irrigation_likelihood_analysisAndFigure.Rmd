@@ -1,0 +1,246 @@
+---
+title: "Irrigation likelihood"
+author: "jill deines"
+date: '2022-12-04'
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+  
+Goal: Assess factors that might predict irrigation installation
+
+Notes:
+
+* creates Figure 4
+* input master data file available in associated Zenodo repo
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path='../figure/04.00_irrLikelihood/',
+                      cache = FALSE)
+```
+
+**R Packages Needed**
+  
+```{r packages, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(RColorBrewer)
+library(ggforce)
+
+library(here)
+sessionInfo()
+```
+
+
+*Directories*
+  
+```{r directories}
+repoDir <- here::here()
+
+# master data
+dataDir <- '/Users/dein121/local/data_nonRepo/2025_irrigationAndYields/final_data_repo'
+dataName <- 'pointSample_combined_fewerCDL_20240205.rds'
+
+figDir <- paste0(repoDir,'/Figures_manuscript')
+```
+
+
+# Load and filter
+Clean master data by:
+
+* remove spurious classifications (eg, annual status differs from overarching irrigation type)
+* remove the "existing irrigation" class
+* focus on irrigation year of adoption -> condense each point into 1 observation
+ 
+```{r loadMaster}
+# load data, extract corn
+master <- readRDS(paste0(dataDir,'/',dataName))
+
+
+master1 <- master %>% 
+  filter(irr_type != 'existing')
+nrow(master1)
+
+# check point type numbers
+masterSlice <- master %>% 
+  group_by(geom_id) %>%
+  slice(1) %>%
+  ungroup()
+
+table(masterSlice$irr_type)
+```
+
+## new irrigation
+reduce to 1 record each point
+```{r process_new}
+new <- master1 %>% 
+  filter(irr_type == 'new')
+
+# main record: adoption year
+new_one<-new %>%
+  filter(year == adoptionYear)
+
+# find dominant previous crop
+dominantCropBefore <- new %>%
+  filter(year < adoptionYear) %>%
+  group_by(geom_id, cdl_class) %>%
+  summarize(frequency = n()) %>%
+  ungroup() %>%
+  group_by(geom_id) %>%
+  filter(frequency == max(frequency)) %>%
+  ungroup()
+table(dominantCropBefore$cdl_class)
+
+# find dominant subsequent crop
+dominantCropAfter <- new %>%
+  filter(year >= adoptionYear) %>%
+  group_by(geom_id, cdl_class) %>%
+  summarize(frequency = n()) %>%
+  ungroup() %>%
+  group_by(geom_id) %>%
+  filter(frequency == max(frequency)) %>%
+  ungroup()
+table(dominantCropAfter$cdl_class)
+
+
+```
+
+
+## static variables only
+
+```{r getStatic}
+static0 <- master1 %>%
+  group_by(geom_id) %>%
+  slice(1) %>%
+  ungroup()
+table(static0$irr_type)
+
+# drop annual vars
+static <- static0[,1:44]
+
+# recod irr type
+static_all <- static %>%
+  mutate(irr_status = case_when(irr_type == 'new' ~ 1,
+                                irr_type == 'never - random' ~ 0,
+                                irr_type == 'never - counter' ~ 0)) %>%
+  mutate(pr_junJul_norm = pr_jul_norm_mm + pr_jun_norm_mm)
+
+# only counterfactuals
+static_counter <- static_all %>%
+  filter(irr_type != 'never - random')
+```
+
+
+
+
+# logistic regression
+
+## using all negatives
+includes never - random and never-counterfactual
+
+```{r logit}
+
+# df with z scores
+static_scaled <- static_all
+cols <- c('dist_toIrr','dist_toStream','wtd_zell', 'ksat', 
+          'vpd_jul_norm_hPa','pr_junJul_norm')
+
+# change sign to go from "distance" to "proximity"
+colsToChangeSign <- c('dist_toIrr','dist_toStream','wtd_zell')
+static_scaled[cols] <- scale(static_scaled[cols])  
+static_scaled[colsToChangeSign] <- static_scaled[colsToChangeSign]*-1
+
+
+static_scaled <- static_scaled %>%
+  rename(proxIrr = dist_toIrr,
+         proxStream = dist_toStream,
+         proxWT = wtd_zell)
+
+
+model1 <- glm(irr_status ~ proxIrr + proxStream + proxWT +
+                ksat + vpd_jul_norm_hPa + pr_junJul_norm  ,
+              data = static_scaled, family = 'binomial')
+
+summary(model1)
+exp(coef(model1))
+
+# get CI and translate coeffs + CI to odds ratios
+conf95 <- confint(model1)
+conf95_exp <- exp(conf95) %>%
+  as.data.frame() %>%
+  mutate(variable = row.names(.)) %>%
+  rename(CI_lower = `2.5 %`,
+         CI_higher = `97.5 %`)
+
+
+
+
+modelCoeffs <- data.frame(variable = names(exp(coef(model1))),
+                          coefficient = exp(coef(model1))) %>%
+               as_tibble() %>%
+               filter(variable != '(Intercept)')%>%
+  left_join(conf95_exp)
+
+modelCoeffs
+
+1/.03 # field close to irrigaiton is 33 x more likely to be irrigated
+      # than a field one standard deviation further away
+
+# manipulate based on =/- effect
+modelCoeffs2 <- modelCoeffs %>%
+  mutate(coeff2 = coefficient - 1,
+         CI_lower2 = CI_lower -1,
+         CI_higher2 = CI_higher -1) 
+```
+
+
+# ms plot: Fig 4
+plot it so they appear against the "1" odds ratio
+
+```{r ms_plot}
+varPalette = c(rep('#4393c3',3),
+               rep('#d6604d',2),
+                   '#fdae61')
+
+modelCoeffs2$variable2 <- factor(c('Proximity to Irrigation',
+                                   'Proximity to Stream',
+                                   'Proximity to Water Table',
+                                   'Soil Ksat',
+                                   'July VPD',
+                                   'June-July Ppt'),
+                                levels = c("Proximity to Irrigation",
+                                             'Proximity to Stream',
+                                          'Proximity to Water Table',
+                                                 'July VPD',
+                                                  'June-July Ppt',
+                                           'Soil Ksat'))
+
+p_odds <- ggplot(modelCoeffs2,
+       aes(x = variable2, y = coeff2, fill = variable2)) +
+  geom_bar(stat = 'identity') +
+  geom_errorbar(aes(ymin = CI_lower2, ymax = CI_higher2), width = .3) +
+  coord_cartesian(ylim = c(-0.25, .75)) +
+  geom_hline(yintercept = 0, linetype = 'dashed') +
+  scale_fill_manual(values = varPalette) +
+  scale_y_continuous(name = "Odds Ratio", 
+                   breaks = c(-.25, 0, .25,.5,.75),
+                   labels = c("0.75",'1.00','1.25','1.50','1.75')) +
+  xlab('') +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.position = 'none')
+p_odds
+
+
+ggsave(filename = paste0(figDir,'/Fig4_likelihood_oddsRatio.png'),
+       plot =p_odds, dpi = 600,
+       device = 'png' , width = 2.5, height = 3.5, units = 'in')
+
+ggsave(filename = paste0(figDir,'/Fig4_likelihood_oddsRatio.pdf'),
+       plot =p_odds, dpi = 600,
+       device = 'pdf' , width = 2.5, height = 3.5, units = 'in')
+```
+
