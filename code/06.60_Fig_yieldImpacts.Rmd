@@ -1,0 +1,834 @@
+---
+title: "Figure: Yield Impacts"
+author: "jill deines"
+date: '2025-02-03'
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+  
+Goal: Create paper figures displaying yield impacts of irrigation. Also includes deriving some summary statistics
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path='../figure/06.60_Figs_yieldImpacts/',
+                      cache = FALSE,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+**R Packages Needed**
+  
+```{r packages, warning=FALSE, message=FALSE}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(patchwork)
+
+#library(devtools)
+#install_github("vqv/ggbiplot")
+library(ggbiplot)
+
+library(here)
+sessionInfo()
+```
+
+
+*Directories*
+  
+```{r directories}
+localDir <- '/Users/dein121/local/data_nonRepo/2025_irrigationAndYields/final_data_repo'
+
+# data with results produced vis 03.00 and 03.50 causal forests scripts
+dataDir <- paste0(localDir,'/formatted_figureInput')
+maize_fn <- 'maize_causalForestOutput_20250206.csv'
+soy_fn <- 'soybeans_causalForestOutput_20250206.csv'
+
+# load data
+maizeData <- read_csv(paste0(dataDir,'/',maize_fn))
+soyData <- read_csv(paste0(dataDir,'/',soy_fn))
+
+# check planting density - maize
+repoDir <- here::here()
+pd0 <- read_csv(paste0(repoDir,'/data/tabular/nass/plantingDensity_20250212.csv') )
+
+# fig output
+figDir <- paste0(repoDir,'/Figures_manuscript')
+
+```
+
+# Fig 4 - yield impacts
+## Maize
+
+### Maize Treatment Effects
+
+```{r maize_te}
+# assign groups by cate tercile
+maizeData1 <- maizeData %>%
+  mutate(cate_group = ntile(predictions,3),
+          cate_group = as.factor(cate_group),
+         cate_group_p = ntile(yield_diff_perc,3),
+         cate_group_p = as.factor(cate_group_p))
+table(maizeData1$cate_group)
+
+catePalette3 <- c("#86BDDA","#F6B394","#CF5246")
+
+# plot: t/ha
+ate_maize <- 1.53
+maizeData1_hte <- maizeData1 %>%
+  mutate(cate_class = case_when(cate_group ==1 ~ 'Bottom Tercile',
+                                cate_group == 2 ~ 'Mid Tercile',
+                                cate_group == 3  ~ 'Top Tercile'))
+
+
+p_cate_maize <- ggplot(maizeData1_hte,
+       aes(x = predictions, fill = cate_class)) +
+  geom_histogram(color = 'gray30',
+                 breaks = seq(-3,7,.25)) +
+  scale_y_continuous(labels = c('0','20','40'),
+                     breaks = c(0,20000,40000)) +
+  scale_fill_manual(values = c('tan','grey50','turquoise3')) +
+  xlab('Yield Impact (t/ha)') + ylab('Thousand Fields') +
+  geom_vline(xintercept = 0, col = 'black', linetype = 'dashed') +
+  geom_vline(xintercept = ate_maize, col = 'goldenrod2', linewidth = 1.5) +
+  theme_bw() + theme(legend.title = element_blank(),
+                     legend.position = c(.75,.8))
+p_cate_maize
+
+
+# plot: percent --------------------------------------
+ate_maize_p <- 12.6
+maizeData1_hte2 <- maizeData1 %>%
+  mutate(cate_class = case_when(cate_group_p ==1 ~ 'Bottom Tercile',
+                                cate_group_p == 2 ~ 'Mid Tercile',
+                                cate_group_p == 3  ~ 'Top Tercile'))
+
+
+p_cate_maize_p <- ggplot(maizeData1_hte2,
+       aes(x = yield_diff_perc, fill = cate_class)) +
+  geom_histogram(color = 'gray30',
+                 breaks = seq(-8,40,2)) +
+  scale_y_continuous(labels = c('0','10','20','30'),
+                     breaks = c(0,10000,20000,30000)) +
+  scale_fill_manual(values = c('tan','grey50','turquoise3')) +
+  xlab('Yield Impact (% Change)') + ylab('Thousand Fields') +
+  geom_vline(xintercept = 0, col = 'black', linetype = 'dashed') +
+  geom_vline(xintercept = ate_maize_p, col = 'goldenrod2', linewidth = 1.5) +
+  theme_bw() + theme(legend.title = element_blank(),
+                     legend.position = c(.75,.8))
+p_cate_maize_p
+
+
+ggsave(filename = paste0(figDir,'/Fig5a_maize_cf_cateDist_percent.png'),
+       plot =p_cate_maize_p, dpi = 600,
+       device = 'png' , width = 3.25, height = 3, units = 'in')
+
+ggsave(filename = paste0(figDir,'/Fig5a_maize_cf_cateDist_percent.pdf'),
+       plot =p_cate_maize_p, dpi = 600,
+       device = 'pdf' , width = 3.25, height = 3, units = 'in')
+
+```
+
+### Maize - PCA
+
+```{r maize_pca}
+
+
+# run pca
+pca_df <- maizeData1 %>% dplyr::select(cate_group,
+                                     ksat, nccpicorn, rootznaws,
+                                     bulkDensityt,# var imp top 
+                                   ppt_jun, tmin_jun, vpd_aug) %>%
+  tidyr::drop_na() %>%
+  filter(cate_group != 2)
+
+  
+pca <- prcomp(pca_df %>% dplyr::select(-cate_group),
+                        center = TRUE, scale. = TRUE)
+summary(pca)
+
+# rough plot
+pcaPal <- c('#bf812d','#5ab4ac')
+ggbiplot(pca, groups = as.factor(pca_df$cate_group), alpha=0.02, ellipse=TRUE) +
+    scale_color_manual(values = pcaPal) +
+  ylab('PCA Component 2') + xlab('PCA Component 1') +
+  ylim(c(-3.25,3.25)) + xlim(c(-3, 3)) +
+  coord_equal() +
+  theme_bw() +theme(legend.position = 'none',
+                     panel.grid.major = element_blank(),
+                      panel.grid.minor = element_blank(),
+                     text = element_text(size = 16))
+
+
+# create figure in two parts to maintain var name editability (vector) in composite
+
+# # points only
+pcaPal <- c('tan3','turquoise4')
+
+p_pcaCloud <- ggbiplot(pca, groups = as.factor(pca_df$cate_group), alpha=0.03, ellipse=FALSE,  var.axes = FALSE) +
+    scale_color_manual(values = pcaPal) +
+  ylab('PCA Component 2') + xlab('PCA Component 1') +
+  ylim(c(-3.25,3.25)) + xlim(c(-3, 3)) +
+  coord_equal() +
+  theme_bw() +theme(legend.position = 'none',
+                     panel.grid.major = element_blank(),
+                      panel.grid.minor = element_blank())
+p_pcaCloud
+
+ggsave(filename = paste0(figDir,'/Fig5b_maize_pca_cloudOnly.png'),
+       plot =p_pcaCloud, dpi = 600,
+       device = 'png' , width = 7, height = 6, units = 'in')
+
+
+# # vectors
+p_pcaAxes <- ggbiplot(pca, groups = as.factor(pca_df$cate_group), alpha=0.00, ellipse=TRUE) +
+    scale_color_manual(values = pcaPal) +
+  ylab('PCA Component 2') + xlab('PCA Component 1') +
+ ylim(c(-3.25,3.25)) + xlim(c(-3, 3)) +
+  coord_equal() +
+  theme_bw() +theme(legend.position = 'none',
+                     panel.grid.major = element_blank(),
+                      panel.grid.minor = element_blank())
+
+p_pcaAxes
+
+ggsave(filename = paste0(figDir,'/Fig5b_maize_pca_vectors.pdf'),
+       plot =p_pcaAxes, dpi = 600,
+       device = 'pdf' , width = 3.5, height = 3, units = 'in')
+```
+
+
+## soybeans
+
+### Soybean Treatment Effects
+
+```{r soy_te}
+# assign groups by cate tercile
+soyData1 <- soyData %>%
+  mutate(cate_group = ntile(predictions,3),
+          cate_group = as.factor(cate_group),
+         cate_group_p = ntile(yield_diff_perc,3),
+         cate_group_p = as.factor(cate_group_p))
+table(soyData1$cate_group)
+
+
+catePalette3 <- c("#86BDDA","#F6B394","#CF5246")
+
+
+# plot: t/ha
+ate_soy <- 0.29
+soyData1_hte <- soyData1 %>%
+  mutate(cate_class = case_when(cate_group ==1 ~ 'Bottom Tercile',
+                                cate_group == 2 ~ 'Mid Tercile',
+                                cate_group == 3  ~ 'Top Tercile'))
+
+
+p_cate_soy <- ggplot(soyData1_hte,
+       aes(x = predictions, fill = cate_class)) +
+  geom_histogram(color = 'gray30',
+                 breaks = seq(-.3,1,.03)) +
+  scale_y_continuous(labels = c('0','10','20'),
+                     breaks = c(0,10000,20000)) +
+  scale_fill_manual(values = c('tan','grey50','turquoise3')) +
+  xlab('Yield Impact (t/ha)') + ylab('Thousand Fields') +
+  geom_vline(xintercept = 0, col = 'black', linetype = 'dashed') +
+  geom_vline(xintercept = ate_soy, col = 'goldenrod2', linewidth = 1.5) +
+  theme_bw() + theme(legend.title = element_blank(),
+                     legend.position = c(.75,.8))
+p_cate_soy
+
+
+
+# plot: percent --------------------------------------
+summary(soyData1$yield_diff_perc)
+ate_soy_p <- 7.9
+soyData1_hte2 <- soyData1 %>%
+  mutate(cate_class = case_when(cate_group_p ==1 ~ 'Bottom Tercile',
+                                cate_group_p == 2 ~ 'Mid Tercile',
+                                cate_group_p == 3  ~ 'Top Tercile'))
+
+
+p_cate_soy_p <- ggplot(soyData1_hte2,
+       aes(x = yield_diff_perc, fill = cate_class)) +
+  geom_histogram(color = 'gray30',
+                 breaks = seq(-10,40,2)) +
+  scale_y_continuous(labels = c('0','20','40','60'),
+                     breaks = c(0,20000,40000,60000)) +
+  scale_fill_manual(values = c('tan','grey50','turquoise3')) +
+  xlab('Yield Impact (% Change)') + ylab('Thousand Fields') +
+  geom_vline(xintercept = 0, col = 'black', linetype = 'dashed') +
+  geom_vline(xintercept = ate_soy_p, col = 'goldenrod2', linewidth = 1.5) +
+  theme_bw() + theme(legend.title = element_blank(),
+                     legend.position = c(.75,.8))
+p_cate_soy_p
+
+
+ggsave(filename = paste0(figDir,'/Fig5c_soy_cf_cateDist_percent.png'),
+       plot =p_cate_soy_p, dpi = 600,
+       device = 'png' , width = 3.25, height = 3, units = 'in')
+
+ggsave(filename = paste0(figDir,'/Fig5c_soy_cf_cateDist_percent.pdf'),
+       plot =p_cate_soy_p, dpi = 600,
+       device = 'pdf' , width = 3.25, height = 3, units = 'in')
+
+```
+
+
+
+### soybean - PCA
+
+```{r soy_pca}
+# assign groups by cate tercile
+soyData1 <- soyData %>%
+  mutate(cate_group = ntile(predictions,3),
+          cate_group = as.factor(cate_group))
+table(maizeData1$cate_group)
+
+
+pca_df_soy <- soyData1 %>% dplyr::select(cate_group,silt,nccpisoy,ksat,
+                                         rootznaws, pr_grow, vpd_aug) %>%
+  tidyr::drop_na() %>%
+  filter(cate_group != 2)
+
+  
+pca_soy <- prcomp(pca_df_soy %>% dplyr::select(-cate_group),
+                        center = TRUE, scale. = TRUE)
+summary(pca_soy)
+
+# rough plot
+pcaPal <- c('#bf812d','#5ab4ac')
+ggbiplot(pca_soy, groups = as.factor(pca_df_soy$cate_group), alpha=0.02, ellipse=TRUE) +
+    scale_color_manual(values = pcaPal) +
+  ylab('PCA Component 2') + xlab('PCA Component 1') +
+ ylim(c(-3.25,3.25)) + xlim(c(-3, 3)) +
+  coord_equal() +
+  theme_bw() +theme(legend.position = 'none',
+                     panel.grid.major = element_blank(),
+                      panel.grid.minor = element_blank(),
+                     text = element_text(size = 16))
+
+
+# create figure in two parts to maintain var name editability (vector) in composite
+
+# # points only
+pcaPal <- c('tan3','turquoise4')
+
+p_pcaCloud_soy <- ggbiplot(pca_soy, groups = as.factor(pca_df_soy$cate_group), 
+                           alpha=0.03, ellipse=FALSE,  var.axes = FALSE) +
+    scale_color_manual(values = pcaPal) +
+  ylab('PCA Component 2') + xlab('PCA Component 1') +
+ ylim(c(-3.25,3.25)) + xlim(c(-3, 3)) +
+  coord_equal() +
+  theme_bw() +theme(legend.position = 'none',
+                     panel.grid.major = element_blank(),
+                      panel.grid.minor = element_blank())
+p_pcaCloud_soy
+
+ggsave(filename = paste0(figDir,'/Fig5d_soy_pca_cloudOnly.png'),
+       plot =p_pcaCloud_soy, dpi = 600,
+       device = 'png' , width = 7, height = 6, units = 'in')
+
+
+# # vectors
+p_pcaAxes_soy <- ggbiplot(pca_soy, groups = as.factor(pca_df_soy$cate_group), alpha=0.00, ellipse=TRUE) +
+    scale_color_manual(values = pcaPal) +
+  ylab('PCA Component 2') + xlab('PCA Component 1') +
+ ylim(c(-3.25,3.25)) + xlim(c(-3, 3)) +
+  coord_equal() +
+  theme_bw() +theme(legend.position = 'none',
+                     panel.grid.major = element_blank(),
+                      panel.grid.minor = element_blank())
+
+p_pcaAxes_soy
+
+ggsave(filename = paste0(figDir,'/Fig5d_soy_pca_vectors.pdf'),
+       plot =p_pcaAxes_soy, dpi = 600,
+       device = 'pdf' , width = 3.5, height = 3, units = 'in')
+```
+
+
+
+
+# Fig 6 - trends
+
+
+## maize + soy over time
+
+```{r time_maizeSoy}
+# maize stats: trend in CATE over time
+maizeDataAnnualCate <- maizeData %>%
+  group_by(year) %>%
+  dplyr::summarize(averageP = mean(yield_diff_perc)) %>%
+  ungroup()
+maizeTrendCATE <- lm(averageP ~ year, data = maizeDataAnnualCate)
+summary(maizeTrendCATE)
+
+
+# summary
+earlyObs_maize <- maizeData %>% 
+  filter(year >= 1999 & year <=2003) 
+summary(earlyObs_maize$yield_diff_perc)
+
+lateObs_maize <- maizeData %>% 
+  filter(year >= 2013 & year <=2017) 
+summary(lateObs_maize$yield_diff_perc)
+
+# maize plot
+p_maize_time <- ggplot(maizeData,
+       aes(x =  year, y = yield_diff_perc)) +
+  geom_hline(yintercept = 12.6, linetype = 'dashed', color = 'red') +
+  geom_hline(yintercept = 0, linetype = 'dotted', color = 'black') +
+  geom_boxplot(aes(group = year),outlier.shape = NA, coef=0, fill = 'goldenrod2') +
+  coord_cartesian(ylim=c(-2,42)) +
+  ylab("Yield Impact (% Change)") + xlab ('Year') +
+  theme_bw()  +
+  theme(panel.grid.minor.y = element_blank())
+p_maize_time
+
+# soy stats: trend of CATE over time
+
+soyDataAnnualCate <- soyData %>%
+  group_by(year) %>%
+  dplyr::summarize(averageP = mean(yield_diff_perc)) %>%
+  ungroup()
+soyTrendCATE <- lm(averageP ~ year, data = soyDataAnnualCate)
+summary(soyTrendCATE)
+
+
+# soy summary
+earlyObs_soy <- soyData %>% 
+  filter(year >= 1999 & year <=2003) 
+summary(earlyObs_soy$yield_diff_perc)
+
+lateObs_soy <- soyData %>% 
+  filter(year >= 2013 & year <=2017) 
+summary(lateObs_soy$yield_diff_perc)
+
+# soy plot
+p_soy_time <- ggplot(soyData ,
+       aes(x =  year, y = yield_diff_perc)) +
+  geom_hline(yintercept = 7.9, linetype = 'dashed', color = 'red') +
+  geom_hline(yintercept = 0, linetype = 'dotted', color = 'black') +
+  geom_boxplot(aes(group = year),outlier.shape = NA, coef=0, fill = 'green4') +
+  coord_cartesian(ylim=c(-2,42)) +
+  ylab("Yield Impact (% Change)") + xlab('Year') +
+  theme_bw()  +
+  theme(panel.grid.minor.y = element_blank())
+p_soy_time
+
+# combine plots
+p_overTime <- p_maize_time + p_soy_time +
+  plot_layout(axis_titles = 'collect')
+
+
+```
+
+## other things over time
+
+planting density downloaded from NASS Quickstats with query: survey - crops - field crops - [corn, soybeans] - [plant population, row width] - state
+
+```{r}
+# vpd stats: trend
+vpdTrend <- lm(vpd_aug ~ year, data = maizeData)
+summary(vpdTrend)
+
+
+summary(maizeData$vpd_aug)
+p_augvpd <- ggplot(maizeData,
+       aes(x =  year, y = vpd_aug)) +
+    geom_hline(yintercept = 0.9, linetype = 'dashed', color = 'red') +
+  geom_boxplot(aes(group = year),outlier.shape = NA, coef=0, fill = 'cadetblue3') +
+  coord_cartesian(ylim= c(.45,2))+
+
+  ylab("August VPD (kPa)") + xlab('Year')+
+  theme_bw()  +
+  theme(panel.grid.minor = element_blank())
+p_augvpd
+
+
+
+# maize planting dates: format and plot
+pd <- pd0 %>%
+  mutate(Value = gsub(",","",Value)) %>%
+  mutate(Value = as.numeric(Value)) %>%# just 1 na %
+  mutate(dataItem = `Data Item`)
+
+# by state
+plantDensity <- pd %>%
+  filter(State %in% c('ILLINOIS','INDIANA','IOWA','MINNESOTA','OHIO',
+                      'WISCONSIN'),
+         Period == 'YEAR') %>%
+  dplyr::group_by(Year, State) %>%
+  dplyr::summarize(Value = mean(Value))
+
+ggplot(plantDensity,
+       aes(x = Year, y = Value, color = State, group = State)) +
+  geom_line() +
+  ylab('Planting Density') +
+  #facet_wrap(~State) +
+  theme_bw() +
+  theme(legend.position = 'bottom')
+
+
+
+# region average
+plantDensity_studyArea <- pd %>%
+  filter(State %in% c('ILLINOIS','INDIANA','IOWA','MINNESOTA','OHIO',
+                      'WISCONSIN'),
+         Period == 'YEAR') %>%
+  dplyr::group_by(Year) %>%
+  dplyr::summarize(Value = mean(Value))
+
+p_plantDens <- ggplot(plantDensity_studyArea %>% filter(Year < 2018 & Year >=1997),
+       aes(x = Year, y = Value/1000)) +
+  geom_line() +
+  ylab('Thousand Plants Per Acre') +
+  #facet_wrap(~State) +
+  theme_bw()  +
+  theme(panel.grid.minor = element_blank())
+p_plantDens
+
+```
+
+
+
+
+## combine fig 7
+
+```{r fig4Combo, fig.width = 6.5, fig.height = 5}
+design <- "AABB
+           CCDD"
+
+p_fig4_top <- p_maize_time + p_soy_time + p_augvpd +p_plantDens +
+  plot_layout(axis_titles = 'collect',
+              design = design)
+p_fig4_top
+
+ggsave(filename = paste0(figDir,'/Fig7_part_abcd.pdf'),
+       plot =p_fig4_top, dpi = 600,
+       device = 'pdf' , width = 6.75, height = 5, units = 'in')
+
+ggsave(filename = paste0(figDir,'/Fig7_part_abcd.png'),
+       plot =p_fig4_top, dpi = 600,
+       device = 'png' , width = 6.75, height = 5, units = 'in')
+```
+
+
+
+# Fig 6 - By Soil Quality and VPD
+text numbers and fig
+
+```{r vpd}
+both <- maizeData %>%
+  mutate(crop = 'Maize') %>%
+  dplyr::select(c(geom_id, year, crop, predictions, Y,
+                  yield_diff_perc, vpd_aug)) %>%
+  bind_rows(soyData %>%
+              mutate(crop = 'Soybeans') %>%
+              dplyr::select(c(geom_id, year, crop, predictions, Y, 
+                              yield_diff_perc, vpd_aug))) %>%
+  mutate(vpd_bin = case_when(vpd_aug > 0.5 & vpd_aug <= 1 ~ 0.5,
+                             vpd_aug > 1 & vpd_aug <= 1.5 ~ 1,
+                             vpd_aug > 1.5 & vpd_aug <= 2 ~ 1.5,
+                             vpd_aug > 2 & vpd_aug <= 2.5 ~2)) %>%
+  mutate(vpd_bin_crop = interaction(vpd_bin, crop),
+         vpd_bin_crop2 = factor(vpd_bin_crop,
+                                  levels = c('0.5.Soybeans','0.5.Maize',
+                                             '1.Soybeans',  '1.Maize',
+                                             '1.5.Soybeans','1.5.Maize',
+                                             '2.Soybeans',  '2.Maize')))
+# stats by class
+stats <-both %>%
+  dplyr::group_by(crop, vpd_bin) %>%
+  dplyr::summarize(yield_diff_perc2 = mean(yield_diff_perc),
+                   CATE = mean(predictions),
+            vpd_aug = mean(vpd_aug, na.rm = T)) 
+
+stats
+
+
+          
+# boxplot - with modified labels to show bins
+p_vpdYield <- ggplot(both %>% filter(!is.na(vpd_bin)),
+                     aes(x = vpd_bin, y = yield_diff_perc, fill = crop,
+                         group = vpd_bin_crop2)) +
+  geom_boxplot(outlier.shape = NA, coef=0, ) +
+  geom_point(data = stats, aes(x = vpd_bin, y = yield_diff_perc2, 
+                               group=interaction(crop, vpd_bin)),
+             shape = 'asterisk') +
+  scale_x_continuous(breaks = c(0.25,    .75,1.25,1.75,2.25),
+                     labels = c('0.5','1','1.5','2','2.5')) +
+  scale_fill_manual(values = c('goldenrod2','green4')) +
+  coord_cartesian(ylim=c(0,40)) +
+  
+  ylab('Yield Impact (% Change)') + xlab('August VPD (kPa)') +
+  theme_bw() + theme(legend.title = element_blank(),
+                     legend.position = c(.3,.8),
+                     legend.background = element_blank(),
+                     panel.grid.minor = element_blank())
+
+p_vpdYield
+
+
+
+# get some summary stats - vpd occurence, historical
+vpdCounts <- both %>%
+  mutate(vpd_bin = case_when(is.na(vpd_bin) ~ 0.5,
+                             !is.na(vpd_bin) ~ vpd_bin)) %>%
+  group_by(vpd_bin) %>%
+  dplyr::summarize(number = n()) %>% 
+  ungroup()
+vpd_n = sum(vpdCounts$number)
+vpdCounts2 <- vpdCounts %>% mutate(percent = number/vpd_n * 100)
+vpdCounts2
+
+
+```
+
+## soil and yields
+
+### line plot - not used
+
+```{r soil_stuff, fig.width = 6.5, fig.height = 3}
+# maize yield affects of top/bottom quartiles
+maizeData %>%
+  mutate(nccpi_tile = ntile(nccpicorn,4)) %>%
+  dplyr::group_by(nccpi_tile) %>%
+  dplyr::summarize(yield_diff_perc2 = mean(yield_diff_perc),
+            nccpi = mean(nccpicorn))
+
+quantile(maizeData$nccpicorn,.05)
+
+# soy yield affects of top/bottom quartiles
+soyData %>%
+  mutate(nccpi_tile = ntile(nccpisoy,4)) %>%
+  dplyr::group_by(nccpi_tile) %>%
+  dplyr::summarize(yield_diff_perc2 = mean(yield_diff_perc),
+            nccpi = mean(nccpisoy))
+
+
+# figure (supplement)
+p_maizeSoil <- ggplot(maizeData %>% filter(nccpicorn > 0.2),
+                      aes(x =  nccpicorn, y = yield_diff_perc)) +
+   geom_smooth(col = 'goldenrod2') +
+  coord_cartesian(ylim=c(0,25)) +
+  ylab('Yield Impact (% Change)') + xlab('Soil Productivity Index') +
+  theme_bw() + ggtitle('Maize') +
+  theme(panel.grid.minor = element_blank())
+
+p_soySoil <- ggplot(soyData %>% filter(nccpisoy > 0.2),
+                      aes(x =  nccpisoy, y = yield_diff_perc)) +
+   coord_cartesian(ylim=c(0,25)) +
+   geom_smooth(col = 'green4') +
+  ylab('Yield Impact (% Change)') + xlab('Soil Productivity Index') +
+  theme_bw() + ggtitle('Soybeans') +
+  theme(panel.grid.minor = element_blank())
+
+# combine
+p_soils <- p_maizeSoil + p_soySoil +
+  plot_layout(axis_titles = 'collect')
+p_soils
+
+     
+```
+
+
+### soil by bins
+
+```{r soilPlot_bins}
+# combine crop dfs with soil quartiles
+both_soilBins <- maizeData %>%
+  mutate(crop = 'Maize',
+         nccpi_tile = ntile(nccpicorn,4)) %>%
+  dplyr::select(c(geom_id, crop, W, predictions, yield_diff_perc, nccpi_tile)) %>%
+  bind_rows(soyData %>%
+              mutate(crop = 'Soybeans',
+                     nccpi_tile = ntile(nccpisoy,4)) %>%
+              dplyr::select(c(geom_id, crop, W, predictions,
+                              yield_diff_perc, nccpi_tile))) 
+
+
+# stats by class
+stats_soil <-both_soilBins %>%
+  dplyr::group_by(crop, nccpi_tile) %>%
+  dplyr::summarize(yield_diff_perc2 = mean(yield_diff_perc),
+                   CATE = mean(predictions)) 
+
+stats_soil
+
+# plot
+p_soilYield <- ggplot(both_soilBins %>% filter(!is.na(nccpi_tile)),
+                     aes(x = nccpi_tile, y = yield_diff_perc, fill = crop,
+                         group = interaction(crop,nccpi_tile))) +
+  geom_boxplot(outlier.shape = NA, coef=0, ) +
+  geom_point(data = stats_soil, aes(x = nccpi_tile, y = yield_diff_perc2, 
+                               group=interaction(crop, nccpi_tile)),
+             shape = 'asterisk') +
+  scale_fill_manual(values = c('goldenrod2','green4')) +
+  coord_cartesian(ylim=c(0,40)) +
+  ylab('Yield Impact (% Change)') + xlab('Soil Quality Quartile') +
+  theme_bw() + theme(legend.title = element_blank(),
+                     legend.position = c(.3,.8),
+                     legend.background = element_blank(),
+                     panel.grid.minor = element_blank())
+
+p_soilYield
+```
+
+### combine vpd and soils
+
+```{r soilVpdplot}
+p_vpdYield2 <- p_vpdYield + ylab('') + theme(legend.position = 'none')
+
+p_soyVpd <- p_soilYield + p_vpdYield2
+
+
+ggsave(filename = paste0(figDir,'/Fig6_effects_bySoil_byVpd.png'),
+       plot =p_soyVpd, dpi = 600,
+       device = 'png' , width = 6.5, height = 3, units = 'in')    
+
+ggsave(filename = paste0(figDir,'/Fig6_effects_bySoil_byVpd.pdf'),
+       plot =p_soyVpd, dpi = 600,
+       device = 'pdf' , width = 6.5, height = 3, units = 'in')   
+```
+
+
+
+# By State
+supplement
+```{r state}
+states <- data.frame(state_name = 
+                       c('Illinois','Indiana','Iowa','Michigan','Minnesota',
+                         'Ohio','Wisconsin'),
+                     state_abbrev = c('IL','IN','IA','MI','MN','OH','WI'),
+                     stringsAsFactors = FALSE)
+
+
+maizeStates <- maizeData1 %>% 
+  filter(state_name %in% states$state_name) %>% 
+  left_join(states)
+soyStates <- soyData1 %>% 
+    filter(state_name %in% states$state_name) %>% 
+  left_join(states)
+
+
+
+maizeStates_cate <- maizeStates %>%
+  dplyr::group_by(state_abbrev) %>%
+  dplyr::summarize(yield_diff_perc = mean(yield_diff_perc)) %>%
+  ungroup()
+
+maizeStates %>% 
+  filter(state_abbrev %in% c('IA','IL','IN')) %>%
+  dplyr::summarise(cate = mean(yield_diff_perc),
+                   cate2 = mean(predictions))
+
+soyStates_cate <- soyStates %>%
+  dplyr::group_by(state_abbrev) %>%
+  dplyr::summarize(yield_diff_perc = mean(yield_diff_perc)) %>%
+  ungroup()
+
+soyStates %>% 
+  filter(state_abbrev %in% c('IA','IL','IN')) %>%
+  dplyr::summarise(cate = mean(yield_diff_perc),
+                   cate2 = mean(predictions))
+
+# ATE as percent
+p_stateMaizePercent <- ggplot(maizeStates,
+       aes(x = state_abbrev, y = yield_diff_perc, group = state_abbrev)) +
+  geom_boxplot(outlier.shape = NA, coef=0) +
+  # geom_point(data = maizeStates_cate, aes(x = state_abbrev, y =yield_diff_perc ),
+  #            shape = 'asterisk') +
+  coord_cartesian(ylim=c(-2,25)) +
+  ylab("Yield Change (%)") + xlab('State') +
+  theme_bw()  +
+  theme(panel.grid.minor.y = element_blank())
+
+p_stateSoyPercent <- ggplot(soyStates,
+       aes(x = state_abbrev, y = yield_diff_perc, group = state_abbrev)) +
+  geom_boxplot(outlier.shape = NA, coef=0) +
+    # geom_point(data = soyStates_cate, aes(x = state_abbrev, y =yield_diff_perc ),
+    #          shape = 'asterisk') +
+  coord_cartesian(ylim=c(-2,25)) +
+  ylab("Yield Change (%)") + xlab('State') +
+  theme_bw()  +
+  theme(panel.grid.minor.y = element_blank())
+
+p_stateMaizePercent + p_stateSoyPercent
+
+
+# ate as raw yield
+p_stateMaize <- ggplot(maizeStates,
+       aes(x = state_abbrev, y = predictions, group = state_name)) +
+  geom_boxplot(outlier.shape = NA, coef=0) +
+  coord_cartesian(ylim=c(0,3)) +
+  ylab("Yield Impact (t/ha)") + xlab('State') +
+  theme_bw()  +
+  theme(panel.grid.minor.y = element_blank())
+
+p_stateSoy <- ggplot(soyStates,
+       aes(x = state_abbrev, y = predictions, group = state_name)) +
+  geom_boxplot(outlier.shape = NA, coef=0) +
+  coord_cartesian(ylim=c(0,.75)) +
+  ylab("Yield Impact (t/ha)") + xlab('State') +
+  theme_bw()  +
+  theme(panel.grid.minor.y = element_blank())
+
+p_stateMaize + p_stateSoy
+
+# covars by state
+p_stateNCCPI <- ggplot(maizeStates,
+       aes(x = state_abbrev, y = ksat, group = state_name)) +
+  geom_boxplot(outlier.shape = NA, coef=0) +
+  coord_cartesian(ylim=c(.25,1)) +
+  ylab("Soil Productivity Index") + xlab('State') +
+  theme_bw()  +
+  theme(panel.grid.minor.y = element_blank())
+
+p_ppt <- ggplot(soyStates,
+       aes(x = state_abbrev, y = pr_grow, group = state_name)) +
+  geom_boxplot(outlier.shape = NA, coef=0) +
+  coord_cartesian(ylim=c(250,650)) +
+  ylab("Jun-Aug Precip. (mm)") + xlab('State') +
+  theme_bw()  +
+  theme(panel.grid.minor.y = element_blank())
+
+p_vpd <- ggplot(soyStates,
+       aes(x = state_abbrev, y = vpd_aug, group = state_name)) +
+  geom_boxplot(outlier.shape = NA, coef=0) +
+  coord_cartesian(ylim=c(0.25,1.75)) +
+  ylab("August VPD (hPa)") + xlab('State') +
+  theme_bw()  +
+  theme(panel.grid.minor.y = element_blank())
+
+p_wtd <- ggplot(soyStates,
+       aes(x = state_abbrev, y = wtd_zell, group = state_name)) +
+  geom_boxplot(outlier.shape = NA, coef=0) +
+  coord_cartesian(ylim=c(-0.50,10)) +
+  ylab("Water Table Depth (m)") + xlab('State') +
+  theme_bw()  +
+  theme(panel.grid.minor.y = element_blank())
+
+
+
+# compose figure
+p_stateSplit <- (p_stateMaizePercent + p_stateSoyPercent) / 
+  (p_stateMaize + p_stateSoy) +
+  (p_stateNCCPI  + p_ppt ) /
+  (p_vpd  + p_wtd)  &
+  xlab(NULL)
+p_stateSplit
+
+ggsave(filename = paste0(figDir,'/FigS_effects_byState_withVars.png'),
+       plot =p_stateSplit, dpi = 600,
+       device = 'png' , width = 6.5, height = 6, units = 'in')    
+
+ggsave(filename = paste0(figDir,'/Figs_effects_byState_withVars.pdf'),
+       plot =p_stateSplit, dpi = 600,
+       device = 'pdf' , width = 6.5, height = 6, units = 'in') 
+```
+
